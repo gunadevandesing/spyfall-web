@@ -21,6 +21,7 @@ export default function Room({ params }) {
     location: "",
     players: {},
   });
+  const [hasGameEnded, setHasGameEnded] = useState(false);
 
   // Listen to room data
   useEffect(() => {
@@ -123,18 +124,16 @@ export default function Room({ params }) {
     "Spy",
   ];
 
-  // Start game: assign location, spy, and unique roles
-  const handleStartGame = async () => {
-    if (!room) return;
-    const playerIds = Object.keys(room.players || {});
+  // Helper function to prepare game data
+  const prepareGameData = (players) => {
+    const playerIds = Object.keys(players);
     if (playerIds.length < 3) {
-      alert("At least 3 players required to start the game.");
-      return;
+      throw new Error("At least 3 players required to start the game.");
     }
 
     // Save current player names
     const playerNames = {};
-    Object.entries(room.players).forEach(([id, name]) => {
+    Object.entries(players).forEach(([id, name]) => {
       playerNames[id] = name;
     });
 
@@ -163,13 +162,61 @@ export default function Room({ params }) {
       }
     });
 
-    await update(ref(db, `rooms/${roomId}`), {
-      location,
-      spyId,
-      roles,
-      playerNames,
-      status: "started",
-    });
+    return { location, spyId, roles, playerNames };
+  };
+
+  // Start game: assign location, spy, and unique roles
+  const handleStartGame = async () => {
+    if (!room) return;
+
+    try {
+      const { location, spyId, roles, playerNames } = prepareGameData(
+        room.players || {}
+      );
+      await update(ref(db, `rooms/${roomId}`), {
+        location,
+        spyId,
+        roles,
+        playerNames,
+        status: "started",
+      });
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const handleRestartGame = async () => {
+    if (!room || !isHost) return;
+
+    try {
+      const { location, spyId, roles, playerNames } = prepareGameData(
+        room.players || {}
+      );
+      await update(ref(db, `rooms/${roomId}`), {
+        location,
+        spyId,
+        roles,
+        playerNames,
+        status: "started",
+      });
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const handleEndGame = async () => {
+    if (!room) return;
+
+    try {
+      await update(ref(db, `rooms/${roomId}`), {
+        location: null,
+        spyId: null,
+        roles: null,
+        status: "ended",
+      });
+    } catch (error) {
+      alert(error.message);
+    }
   };
 
   // Exit room: remove player and go home
@@ -338,17 +385,39 @@ export default function Room({ params }) {
           </div>
 
           {/* Game Controls */}
-          {room.status !== "started" && isHost && (
-            <button
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
-              onClick={handleStartGame}
-            >
-              Start Game
-            </button>
-          )}
-          {room.status !== "started" && !isHost && (
+          {isHost ? (
+            <div className="flex gap-3">
+              {room.status === "started" ? (
+                <button
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                  onClick={handleEndGame}
+                >
+                  End Game
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                    onClick={handleStartGame}
+                  >
+                    {room.status === "ended" ? "Start New Game" : "Start Game"}
+                  </button>
+                  {room.status === "ended" && (
+                    <button
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                      onClick={handleRestartGame}
+                    >
+                      Quick Restart
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
             <div className="text-center text-gray-500 bg-gray-50 p-4 rounded-lg">
-              Waiting for host to start the game...
+              {room.status === "started"
+                ? "Game in progress..."
+                : "Waiting for host to start the game..."}
             </div>
           )}
         </div>
