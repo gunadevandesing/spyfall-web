@@ -93,7 +93,21 @@ export default function Room({ params }) {
   }
 
   if (!room) {
-    return <div className="p-4 text-gray-900">Loading room...</div>;
+    return (
+      <main className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
+        <div className="w-full max-w-2xl mx-auto p-8 bg-white rounded-lg shadow-sm">
+          <div className="flex flex-col items-center space-y-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
+            <div className="text-lg text-gray-600 font-medium">
+              Loading game room...
+            </div>
+            <div className="text-sm text-gray-500">
+              Please wait while we set things up
+            </div>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   // Host is the first player in the list
@@ -459,25 +473,6 @@ export default function Room({ params }) {
     }
   };
 
-  const handleRestartGame = async () => {
-    if (!room || !isHost) return;
-
-    try {
-      const { location, spyId, roles, playerNames } = prepareGameData(
-        room.players || {}
-      );
-      await update(ref(db, `rooms/${roomId}`), {
-        location,
-        spyId,
-        roles,
-        playerNames,
-        status: "started",
-      });
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
   const handleEndGame = async () => {
     if (!room) return;
 
@@ -676,14 +671,6 @@ export default function Room({ params }) {
                   >
                     {room.status === "ended" ? "Start New Game" : "Start Game"}
                   </button>
-                  {room.status === "ended" && (
-                    <button
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
-                      onClick={handleRestartGame}
-                    >
-                      Quick Restart
-                    </button>
-                  )}
                 </>
               )}
             </div>
