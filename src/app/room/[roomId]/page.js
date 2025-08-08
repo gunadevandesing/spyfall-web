@@ -20,7 +20,42 @@ export default function Room({ params }) {
     role: "",
     location: "",
     players: {},
+    timeLimit: 8, // Default 8 minutes
+    gameEndTime: null,
+    votes: {},
+    votingOpen: false,
+    remainingTime: null,
   });
+
+  // Timer countdown effect
+  useEffect(() => {
+    if (!room || room.status !== "started" || !room.gameEndTime) return;
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, room.gameEndTime - now);
+
+      if (remaining === 0 && !room.votingOpen) {
+        // Time's up - open voting
+        update(ref(db, `rooms/${roomId}`), { votingOpen: true });
+        return;
+      }
+
+      // Convert to minutes and seconds for more precise countdown
+      const totalSeconds = Math.floor(remaining / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+
+      setGameData((prev) => ({
+        ...prev,
+        remainingTime: minutes + seconds / 60, // Store as decimal for smooth countdown
+      }));
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [room?.gameEndTime, room?.status, roomId]);
 
   // Listen to room data
   useEffect(() => {
@@ -42,19 +77,21 @@ export default function Room({ params }) {
             }
           });
 
-          setGameData({
+          setGameData((prev) => ({
+            ...prev,
             playerName,
             role: roomData.roles?.[playerId] || "",
             location: roomData.location || "",
             players: activePlayers,
-          });
+          }));
         } else {
-          setGameData({
+          setGameData((prev) => ({
+            ...prev,
             playerName,
             role: "",
             location: "",
             players: roomData.players || {},
-          });
+          }));
         }
       } else {
         setError("Room not found");
@@ -461,13 +498,65 @@ export default function Room({ params }) {
       const { location, spyId, roles, playerNames } = prepareGameData(
         room.players || {}
       );
+      const timeLimit = Math.max(1, Math.min(30, gameData.timeLimit || 8));
+      const gameEndTime = Date.now() + timeLimit * 60 * 1000;
+
       await update(ref(db, `rooms/${roomId}`), {
         location,
         spyId,
         roles,
         playerNames,
         status: "started",
+        gameEndTime,
+        timeLimit: gameData.timeLimit,
+        votes: {},
+        votingOpen: false,
+        spyRevealed: false, // Initialize spyRevealed
       });
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  // Handle voting for a player
+  const handleVote = async (votedPlayerId) => {
+    if (!room || !playerId || !room.votingOpen) return;
+
+    try {
+      // Update the vote in Firebase using proper structure
+      await update(ref(db, `rooms/${roomId}`), {
+        [`votes/${playerId}`]: votedPlayerId,
+      });
+
+      // Get updated votes including the new vote
+      const votes = { ...(room.votes || {}), [playerId]: votedPlayerId };
+      const totalVotes = Object.keys(votes).length;
+      const totalPlayers = Object.keys(room.players || {}).length;
+
+      if (totalVotes === totalPlayers) {
+        // Count votes
+        const voteCounts = {};
+        Object.values(votes).forEach((vote) => {
+          voteCounts[vote] = (voteCounts[vote] || 0) + 1;
+        });
+
+        // Find player with most votes
+        let maxVotes = 0;
+        let votedPlayer = null;
+        Object.entries(voteCounts).forEach(([player, count]) => {
+          if (count > maxVotes) {
+            maxVotes = count;
+            votedPlayer = player;
+          }
+        });
+
+        await update(ref(db, `rooms/${roomId}`), {
+          votingResult: {
+            votedPlayer,
+            votes: voteCounts,
+          },
+        });
+      }
     } catch (error) {
       alert(error.message);
     }
@@ -482,6 +571,10 @@ export default function Room({ params }) {
         spyId: null,
         roles: null,
         status: "ended",
+        votingOpen: false,
+        votes: null,
+        votingResult: null,
+        gameEndTime: null,
       });
     } catch (error) {
       alert(error.message);
@@ -525,6 +618,14 @@ export default function Room({ params }) {
     router.push("/");
   };
 
+  // Timer display helper
+  const formatTime = (minutes) => {
+    if (!minutes && minutes !== 0) return "";
+    const mins = Math.floor(minutes);
+    const secs = Math.floor((minutes - mins) * 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
   return (
     <main className="flex flex-col items-center min-h-screen bg-gray-50">
       {/* Header with exit button */}
@@ -532,6 +633,11 @@ export default function Room({ params }) {
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-gray-800">Room: {roomId}</h1>
+            {room?.status === "started" && gameData.remainingTime !== null && (
+              <div className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-medium">
+                Time: {formatTime(gameData.remainingTime)}
+              </div>
+            )}
             <button
               className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-md text-sm flex items-center gap-2 transition-colors"
               onClick={() => {
@@ -634,20 +740,61 @@ export default function Room({ params }) {
             <h2 className="font-semibold text-gray-900 mb-3">Players</h2>
             <ul className="space-y-2">
               {Object.entries(gameData.players).map(([id, name]) => (
-                <li key={id} className="flex items-center gap-2 text-gray-700">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5 text-gray-400"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  {name}
+                <li
+                  key={id}
+                  className="flex items-center justify-between gap-2 text-gray-700"
+                >
+                  <div className="flex items-center gap-2">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5 text-gray-400"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    {name}
+                  </div>
+                  {room.votingOpen &&
+                    id !== playerId &&
+                    !room.votingResult &&
+                    !room.votes?.[playerId] && (
+                      <button
+                        onClick={() => handleVote(id)}
+                        className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded"
+                      >
+                        Vote
+                      </button>
+                    )}
+                  {room.votes?.[playerId] === id && (
+                    <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded font-medium">
+                      Voted for this player
+                    </span>
+                  )}
+                  {room.votes?.[id] &&
+                    room.votingOpen &&
+                    !room.votingResult && (
+                      <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded font-medium">
+                        Has Voted
+                      </span>
+                    )}
+                  {room.votingResult?.votedPlayer === id && (
+                    <span
+                      className={`px-3 py-1 rounded font-medium ${
+                        room.votingResult.wasSpy
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {room.votingResult.wasSpy
+                        ? "Was the Spy!"
+                        : "Not the Spy"}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -655,29 +802,75 @@ export default function Room({ params }) {
 
           {/* Game Controls */}
           {isHost ? (
-            <div className="flex gap-3">
+            <div className="space-y-4">
               {room.status === "started" ? (
                 <button
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                  className="w-full bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
                   onClick={handleEndGame}
                 >
                   End Game
                 </button>
               ) : (
-                <>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <label
+                        htmlFor="timeLimit"
+                        className="text-sm font-medium text-gray-700"
+                      >
+                        Game Duration:
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="timeLimit"
+                          type="number"
+                          min="1"
+                          max="30"
+                          value={gameData.timeLimit || 8}
+                          onChange={(e) =>
+                            setGameData((prev) => ({
+                              ...prev,
+                              timeLimit: Math.max(
+                                1,
+                                Math.min(30, parseInt(e.target.value) || 8)
+                              ),
+                            }))
+                          }
+                          className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <span className="text-gray-600">minutes</span>
+                      </div>
+                    </div>
+                  </div>
                   <button
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
                     onClick={handleStartGame}
                   >
                     {room.status === "ended" ? "Start New Game" : "Start Game"}
                   </button>
-                </>
+                </div>
+              )}
+              {room.votingResult && (
+                <div
+                  className={`p-4 rounded-lg ${
+                    room.votingResult.wasSpy
+                      ? "bg-green-50 text-green-800"
+                      : "bg-red-50 text-red-800"
+                  }`}
+                >
+                  <p className="font-medium">
+                    Game Over! {room.players[room.votingResult.votedPlayer]} was{" "}
+                    {room.votingResult.wasSpy ? "" : "not "}the spy.
+                  </p>
+                </div>
               )}
             </div>
           ) : (
             <div className="text-center text-gray-500 bg-gray-50 p-4 rounded-lg">
               {room.status === "started"
-                ? "Game in progress..."
+                ? room.votingOpen
+                  ? "Voting in progress... Wait for all players to vote!"
+                  : "Game in progress..."
                 : "Waiting for host to start the game..."}
             </div>
           )}
@@ -686,3 +879,4 @@ export default function Room({ params }) {
     </main>
   );
 }
+
